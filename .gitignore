@@ -15,3 +15,7 @@ bark-server
 dist
 .idea/
 .vscode/
+
+# Docker volume: bbolt database (device keys/tokens)
+/data/
+data/

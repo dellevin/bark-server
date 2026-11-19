@@ -1,14 +1,20 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gofiber/fiber/v2/utils"
+	"github.com/lithammer/shortuuid/v3"
 
 	"github.com/finb/bark-server/v2/apns"
+	"github.com/finb/bark-server/v2/database"
+	"github.com/finb/bark-server/v2/queue"
+	"github.com/finb/bark-server/v2/wspush"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -264,6 +270,11 @@ func push(params map[string]interface{}) (int, error) {
 	msg.DeviceToken = deviceRecord.Token
 	msg.DeviceType = deviceRecord.Type
 
+	// Android devices have no APNs token; deliver over their live WebSocket.
+	if deviceRecord.Type == database.DeviceTypeAndroid {
+		return pushAndroid(&msg)
+	}
+
 	code, err := apns.Push(&msg)
 
 	// Invalid token, delete it from database.
@@ -272,6 +283,32 @@ func push(params map[string]interface{}) (int, error) {
 	}
 	if err != nil {
 		return 500, fmt.Errorf("push failed: %v", err)
+	}
+	return 200, nil
+}
+
+// pushAndroid delivers a message to an Android device. It first tries the live
+// WebSocket; when the device has no usable connection the message is persisted
+// in the bbolt queue for retrieval through HTTP long polling (/fetch). The full
+// PushMessage (including all Bark extension params) is forwarded verbatim.
+func pushAndroid(msg *apns.PushMessage) (int, error) {
+	id := shortuuid.New()
+	now := time.Now().Unix()
+
+	// Fast path: a live WebSocket connection exists.
+	wsEnvelope := wspush.Envelope{Type: "message", ID: id, Data: msg, Timestamp: now}
+	if wspush.Default.Push(msg.DeviceKey, wsEnvelope) {
+		return 200, nil
+	}
+
+	// Fallback path: persist for long-poll delivery.
+	raw, err := json.Marshal(msg)
+	if err != nil {
+		return 500, fmt.Errorf("marshal push payload: %v", err)
+	}
+	queued := queue.Envelope{Type: "message", ID: id, Data: raw, Timestamp: now}
+	if err := messageQueue.Enqueue(msg.DeviceKey, queued); err != nil {
+		return 500, fmt.Errorf("enqueue push failed: %v", err)
 	}
 	return 200, nil
 }

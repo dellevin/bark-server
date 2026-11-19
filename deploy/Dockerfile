@@ -1,14 +1,25 @@
 FROM golang:1-alpine AS builder
 
-COPY . /go/src/github.com/finb/bark-server
+# Module proxy; override with --build-arg GOPROXY=direct if needed.
+ARG GOPROXY=https://goproxy.cn,direct
+# All dependencies (bbolt, fiber, apns2, mysql driver) are pure Go:
+# static build, no gcc/libc-dev/git needed in the builder image.
+# -mod=mod lets go install fill missing go.sum entries from the local module
+# cache (the COPY below overwrites the go.sum produced by the earlier download).
+ENV GOPROXY=${GOPROXY} CGO_ENABLED=0 GOOS=linux GOFLAGS=-mod=mod
 
 WORKDIR /go/src/github.com/finb/bark-server
 
+# Dependencies first: this layer is cached unless go.mod/go.sum changes.
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
 RUN set -ex \
-    && apk add git gcc libc-dev \
-    && BUILD_VERSION=$(git describe --tags) \
+    && BUILD_VERSION=$(git describe --tags 2>/dev/null || echo "dev") \
     && BUILD_DATE=$(date "+%F %T") \
-    && COMMIT_SHA1=$(git rev-parse HEAD) \
+    && COMMIT_SHA1=$(git rev-parse HEAD 2>/dev/null || echo "unknown") \
     && go install -trimpath -ldflags \
             "-X 'main.version=${BUILD_VERSION}' \
              -X 'main.buildDate=${BUILD_DATE}' \
@@ -31,6 +42,7 @@ ARG TIMEZONE=Asia/Shanghai
 ENV TZ=${TIMEZONE}
 
 RUN set -ex \
+    && sed -i 's|https://dl-cdn.alpinelinux.org|https://mirrors.aliyun.com|g' /etc/apk/repositories \
     && apk upgrade \
     && apk add --no-cache bash ca-certificates tzdata \
     && ln -sf /usr/share/zoneinfo/${TZ} /etc/localtime \

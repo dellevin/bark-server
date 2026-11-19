@@ -65,6 +65,66 @@ task linux_amd64_v3
 
 Just run the server with `-dsn=user:pass@tcp(mysql_host)/bark`, it will use MySQL instead of file database Bbolt
 
+## Android devices (WebSocket + HTTP long-poll fallback)
+
+iOS/watchOS devices receive pushes through APNs. Android devices cannot use
+APNs, so this fork delivers their messages over a persistent WebSocket, with
+an HTTP long-poll fallback for networks that block long-lived sockets. The
+Bark HTTP API (`/:key/...`, `/push`) stays identical; the server picks the
+channel from the registered `device_type`.
+
+1. **Register** (the Android app generates a random `device_token`):
+
+   ```sh
+   curl -X POST http://host:8080/register \
+        -H 'Content-Type: application/json' \
+        -d '{"device_token":"<random-uuid>","device_type":"android"}'
+   # -> { "data": { "key": "xxxxxxxx", "device_type": "android", ... } }
+   ```
+
+2. **Primary channel — WebSocket.** Keep this open and rely on the 30s ping
+   frames; push envelopes arrive as:
+
+   ```
+   ws://host:8080/ws?device_key=<key>
+   ```
+
+   ```json
+   {"type":"message","id":"<uuid>","timestamp":1700000000,
+    "data":{"id":"...","device_key":"...","title":"...","body":"...",
+            "sound":"1107.caf","ext_params":{"group":"...","url":"..."}}}
+   ```
+
+   The full Bark parameter set is forwarded verbatim in `ext_params`.
+
+3. **Fallback channel — HTTP long polling.** When the WebSocket cannot be
+   established, the client repeatedly calls `/fetch`. The request is held open
+   up to 20s and returns one envelope as soon as one is available, or `204` on
+   timeout. After displaying a message the client confirms it with `/ack`;
+   unacked messages regain visibility after a 60s lease and are redelivered.
+
+   ```sh
+   # long poll (block until a message or 204)
+   curl "http://host:8080/fetch?device_key=<key>"
+   # acknowledge a delivered message id
+   curl -X POST http://host:8080/ack \
+        -H 'Content-Type: application/json' \
+        -d '{"device_key":"<key>","id":"<message-id>"}'
+   # inspect the buffered count
+   curl "http://host:8080/queue?device_key=<key>"
+   ```
+
+4. **Offline durability.** When a push arrives and no WebSocket is connected,
+   the message is persisted in a bbolt queue (`data/queue.db`) instead of being
+   rejected. It survives container restarts and is delivered on the next
+   `/fetch` (or reconnected WebSocket). Undelivered messages expire after the
+   queue TTL (default 7 days, `--queue-ttl` / `BARK_SERVER_QUEUE_TTL`); a
+   background janitor sweeps expired entries hourly.
+
+The long-poll hold time (20s) requires the server write timeout to stay above
+it; the default `--write-timeout` was raised to 35s accordingly. APNs delivery
+for iOS is unchanged.
+
 ## Others
 
 * [API_V2.md](docs/API_V2.md).

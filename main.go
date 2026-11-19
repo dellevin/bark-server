@@ -10,6 +10,7 @@ import (
 
 	"github.com/finb/bark-server/v2/apns"
 	"github.com/finb/bark-server/v2/database"
+	"github.com/finb/bark-server/v2/queue"
 
 	jsoniter "github.com/json-iterator/go"
 
@@ -50,8 +51,19 @@ func runServer(c *cli.Context) error {
 	fiberApp := createFiberApp(c, network)
 	setupRouter(c, fiberApp)
 	initializeDatabase(c)
+	initializeMessageQueue(c)
 	setupGracefulShutdown(fiberApp)
 	return startServer(c, fiberApp, network)
+}
+
+// initializeMessageQueue opens the bbolt-backed offline queue used when an
+// Android device has no active WebSocket connection.
+func initializeMessageQueue(c *cli.Context) {
+	store, err := queue.Open(c.String("data"), c.Duration("queue-ttl"))
+	if err != nil {
+		logger.Fatalf("failed to open message queue: %v", err)
+	}
+	messageQueue = store
 }
 
 // determineNetwork checks if unix socket is configured
@@ -134,6 +146,11 @@ func setupGracefulShutdown(fiberApp *fiber.App) {
 			}
 			if err := db.Close(); err != nil {
 				logger.Errorf("Database close error: %v", err)
+			}
+			if messageQueue != nil {
+				if err := messageQueue.Close(); err != nil {
+					logger.Errorf("Message queue close error: %v", err)
+				}
 			}
 		}
 	}()
@@ -310,10 +327,15 @@ func getAppFlags() []cli.Flag {
 		},
 		&cli.DurationFlag{
 			Name:    "write-timeout",
-			Usage:   "The maximum duration before timing out writes of the response",
+			Usage:   "Maximum duration before timing out response writes; must exceed the 20s long-poll hold time",
 			EnvVars: []string{"BARK_SERVER_WRITE_TIMEOUT"},
-			Value:   3 * time.Second,
-			Hidden:  true,
+			Value:   35 * time.Second,
+		},
+		&cli.DurationFlag{
+			Name:    "queue-ttl",
+			Usage:   "How long undelivered Android messages are retained in the offline queue",
+			EnvVars: []string{"BARK_SERVER_QUEUE_TTL"},
+			Value:   queue.DefaultTTL,
 		},
 		&cli.DurationFlag{
 			Name:    "idle-timeout",

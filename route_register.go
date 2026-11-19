@@ -65,7 +65,9 @@ func doRegister(c *fiber.Ctx, compat bool) error {
 	if deviceType == "" {
 		deviceType = database.DeviceTypeIOS
 	}
-	if deviceType != database.DeviceTypeIOS && deviceType != database.DeviceTypeWatchOS {
+	if deviceType != database.DeviceTypeIOS &&
+		deviceType != database.DeviceTypeWatchOS &&
+		deviceType != database.DeviceTypeAndroid {
 		return c.Status(400).JSON(failed(400, "invalid device type: %s", deviceInfo.DeviceType))
 	}
 	deviceInfo.DeviceType = deviceType

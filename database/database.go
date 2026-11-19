@@ -6,6 +6,9 @@ import "encoding/json"
 const (
 	DeviceTypeIOS     = "ios"
 	DeviceTypeWatchOS = "watchos"
+	// DeviceTypeAndroid devices have no APNs token; messages are delivered
+	// over the persistent WebSocket connection instead of APNs.
+	DeviceTypeAndroid = "android"
 )
 
 // DeviceRecord describes a registered device's APNs token and device type.

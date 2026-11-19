@@ -1,0 +1,33 @@
+# Bark-server（含 Android WebSocket 通道）
+# 部署：在仓库根目录执行  docker compose up -d --build
+# 更新代码后重新执行同一条命令即可滚动重建。
+services:
+  bark-server:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+      # 共享宿主机网络命名空间，使构建容器内能访问宿主机 127.0.0.1 上的代理
+      network: host
+      args:
+        # 构建期走宿主机 xray 的本地 HTTP 代理（go mod download / apk 均自动识别）
+        HTTP_PROXY: http://127.0.0.1:10809
+        HTTPS_PROXY: http://127.0.0.1:10809
+        NO_PROXY: localhost,127.0.0.1
+    image: bark-server-android:latest
+    container_name: bark-server
+    restart: always
+    environment:
+      TZ: Asia/Shanghai
+      # 监听地址与数据目录（容器内默认值，一般无需修改）
+      BARK_SERVER_ADDRESS: 0.0.0.0:8080
+      BARK_SERVER_DATA_DIR: /data
+      # 可选：开启 HTTP Basic 认证（取消注释并修改）
+      # BARK_SERVER_BASIC_AUTH_USER: admin
+      # BARK_SERVER_BASIC_AUTH_PASSWORD: change-me
+      # 模块代理（容器内构建期在 Dockerfile 已设置；运行期不影响）
+    volumes:
+      # 设备 key/token 等持久化在宿主机 ./data（bbolt 文件 bark.db）
+      - ./data:/data
+    ports:
+      # 若仅由本机 Nginx 反代，建议改成 "127.0.0.1:8080:8080" 不对公网暴露
+      - "27053:8080"
